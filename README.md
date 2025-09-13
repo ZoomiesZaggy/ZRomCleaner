@@ -122,3 +122,22 @@ If you like the terminal, you can run it there too.
 python zrom_cleaner.py
 python zrom_cleaner.py D:\Roms --regions U E UK J W --report report.csv
 python zrom_cleaner.py D:\Roms --regions U E UK J W --keep-original-pair --apply
+```
+
+### Configuration File
+
+Default options may be stored in a JSON or INI file and supplied with
+`--config`:
+
+```bash
+python zrom_cleaner.py --config assets/sample_config.json
+```
+
+Values from the configuration file act as defaults. Any flags specified on
+the command line take precedence over the file. The order of precedence is:
+
+1. Explicit command line flags
+2. Values in the config file
+3. Built-in defaults
+
+Sample configuration files can be found in the `assets/` directory.

@@ -1,0 +1,7 @@
+{
+  "path": "/path/to/roms",
+  "regions": ["U", "E", "UK", "J", "W"],
+  "report": "report.csv",
+  "keep_original_pair": true,
+  "apply": false
+}

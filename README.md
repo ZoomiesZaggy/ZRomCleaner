@@ -118,7 +118,11 @@ Command Line (Optional)
 
 If you like the terminal, you can run it there too.
 
+Use `--log-file` to save the console output to a file.
+
 ```bash
 python zrom_cleaner.py
 python zrom_cleaner.py D:\Roms --regions U E UK J W --report report.csv
 python zrom_cleaner.py D:\Roms --regions U E UK J W --keep-original-pair --apply
+python zrom_cleaner.py --log-file run.log D:\Roms
+```

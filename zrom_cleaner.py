@@ -3,6 +3,13 @@
 import sys
 from pathlib import Path
 
+
+def _get_version() -> str:
+    """Return the application version string."""
+    version_file = Path(__file__).with_name("VERSION.txt")
+    # Use UTF-8 to ensure consistent decoding across platforms
+    return version_file.read_text(encoding="utf-8").strip()
+
 def main():
     # placeholder for the full script; users can replace with the latest
     print("ZRom Cleaner skeleton script is bundled. Replace with your full zrom_cleaner.py if needed.")

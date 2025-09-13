@@ -13,6 +13,7 @@ argument which accepts glob patterns to ignore during the scan.
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 from typing import Iterable, List
 
@@ -34,7 +35,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--exclude",
-        action="append",
+        action="extend",
         nargs="+",
         default=[],
         metavar="GLOB",
@@ -59,13 +60,19 @@ def _should_exclude(path: Path, patterns: Iterable[str]) -> bool:
 
 
 def _scan(root: Path, excludes: Iterable[str]) -> List[Path]:
-    """Return a list of paths under *root* ignoring ``excludes``."""
+    """Return a list of files under *root* ignoring ``excludes``."""
 
     results: List[Path] = []
-    for item in root.rglob("*"):
-        if _should_exclude(item, excludes):
-            continue
-        results.append(item)
+    for dirpath, dirnames, filenames in os.walk(root):
+        current = Path(dirpath)
+        dirnames[:] = [
+            d for d in dirnames if not _should_exclude(current / d, excludes)
+        ]
+        for name in filenames:
+            path = current / name
+            if _should_exclude(path, excludes):
+                continue
+            results.append(path)
     return results
 
 
@@ -75,8 +82,7 @@ def main() -> None:
     parser = _build_parser()
     args = parser.parse_args()
 
-    # Flatten patterns provided via ``--exclude``
-    excludes = [p for group in args.exclude for p in group]
+    excludes = args.exclude
 
     root = Path(args.path).resolve()
     for path in _scan(root, excludes):

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ZRom Cleaner – minimal CLI with exclude support.
+"""ZRom Cleaner – minimal CLI with exclude + prompt support.
 
 Scans a directory tree and prints discovered files, with support for
 --exclude globs. Excludes are matched against paths *relative to the scan
@@ -15,7 +15,6 @@ import argparse
 import fnmatch
 import logging
 import os
-import sys
 from pathlib import Path
 from typing import Iterable, List
 
@@ -63,10 +62,7 @@ def _normalize_patterns(patterns: Iterable[str]) -> list[str]:
         p = p.replace("\\", "/").rstrip("/")
         if not p:
             continue
-        if not p.startswith("**/"):
-            p_anywhere = f"**/{p}"
-        else:
-            p_anywhere = p
+        p_anywhere = p if p.startswith("**/") else f"**/{p}"
         norm.append(p_anywhere)
         if is_dir and not p_anywhere.endswith("/**"):
             norm.append(p_anywhere + "/**")
@@ -138,17 +134,20 @@ def _split_excludes(values: list[str] | None) -> list[str]:
     """Split repeatable/comma-separated -x/--exclude values into a flat list."""
     pats: list[str] = []
     for v in values or []:
-      pats.extend([p.strip() for p in v.split(",") if p.strip()])
+        pats.extend([p.strip() for p in v.split(",") if p.strip()])
     return pats
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """
+    Parse args but *tolerate unknown flags* so README examples like
+    '--regions ... --apply' don't fail in this skeleton.
+    """
     parser = argparse.ArgumentParser(description="ZRom Cleaner (minimal CLI)")
     parser.add_argument(
         "path",
         nargs="?",
-        default=".",
-        help="Path to scan (default: current directory)",
+        help="Path to scan (default: prompt; blank = current directory)",
     )
     parser.add_argument(
         "-x", "--exclude",
@@ -163,7 +162,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=0,
         help="Increase log verbosity: none=INFO, -v=DEBUG, -vv=TRACE",
     )
-    return parser.parse_args(argv)
+    args, unknown = parser.parse_known_args(argv)
+    # keep unknowns for logging only; the real app would parse them
+    setattr(args, "_unknown", unknown)
+    return args
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -175,8 +177,21 @@ def main(argv: list[str] | None = None) -> None:
     )
     log = logging.getLogger("zrom_cleaner")
 
-    root = Path(args.path).resolve()
+    # Interactive prompt when no path supplied
+    if args.path is None:
+        try:
+            response = input("Enter ROM directory (leave blank for current directory): ").strip()
+        except EOFError:
+            response = ""
+        root = Path(response) if response else Path.cwd()
+    else:
+        root = Path(args.path)
+
+    root = root.resolve()
     excludes = _split_excludes(args.exclude)
+
+    if getattr(args, "_unknown", None):
+        log.debug("Ignoring unknown args (skeleton): %s", " ".join(args._unknown))
 
     log.info("Scanning: %s", root)
     if excludes:

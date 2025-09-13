@@ -122,3 +122,5 @@ If you like the terminal, you can run it there too.
 python zrom_cleaner.py
 python zrom_cleaner.py D:\Roms --regions U E UK J W --report report.csv
 python zrom_cleaner.py D:\Roms --regions U E UK J W --keep-original-pair --apply
+python zrom_cleaner.py D:\Roms --exclude "*/beta*" --apply
+```

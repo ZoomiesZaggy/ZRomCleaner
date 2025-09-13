@@ -122,3 +122,14 @@ If you like the terminal, you can run it there too.
 python zrom_cleaner.py
 python zrom_cleaner.py D:\Roms --regions U E UK J W --report report.csv
 python zrom_cleaner.py D:\Roms --regions U E UK J W --keep-original-pair --apply
+```
+
+## Build Release Archives
+
+Run the helper script to build and package the app for your platform:
+
+```bash
+./make_release.sh
+```
+
+The script detects whether you are on macOS or Windows and runs the appropriate build and packaging steps, placing the resulting zip file in the `release/` directory.

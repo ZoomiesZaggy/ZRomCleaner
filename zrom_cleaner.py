@@ -1,90 +1,187 @@
 #!/usr/bin/env python3
-"""Minimal ZRom Cleaner CLI.
+"""ZRom Cleaner – minimal CLI with exclude support.
 
-This skeleton script provides a tiny subset of the real project so that
-documentation examples can run in tests.  It exposes a small command line
-interface that scans a directory tree and prints discovered files.  The actual
-project contains a much richer implementation.
+Scans a directory tree and prints discovered files, with support for
+--exclude globs. Excludes are matched against paths *relative to the scan
+root* and can be provided multiple times or as comma-separated lists.
 
-The goal of this repository task is to demonstrate adding an ``--exclude``
-argument which accepts glob patterns to ignore during the scan.
+Examples:
+  python zrom_cleaner.py demo/roms -x cache/ -x "*.nfo,*.txt" -vv
 """
 
 from __future__ import annotations
 
 import argparse
+import fnmatch
+import logging
 import os
+import sys
 from pathlib import Path
 from typing import Iterable, List
 
+# ---------------------------------------------------------------------------
+# Logging helpers (INFO / DEBUG / TRACE)
 
-def _build_parser() -> argparse.ArgumentParser:
-    """Create the argument parser for the CLI.
+TRACE_LEVEL_NUM = 5
+logging.addLevelName(TRACE_LEVEL_NUM, "TRACE")
 
-    Only a very small subset of the real application's arguments are
-    implemented here.  ``--exclude`` accepts one or more glob patterns and can
-    be provided multiple times to build up the list of patterns.
+
+def _trace(self, message, *args, **kwargs):
+    if self.isEnabledFor(TRACE_LEVEL_NUM):
+        self._log(TRACE_LEVEL_NUM, message, args, **kwargs)
+
+
+logging.Logger.trace = _trace  # type: ignore[attr-defined]
+
+
+def determine_log_level(verbosity: int) -> int:
+    """0 -> INFO, 1 -> DEBUG, 2+ -> TRACE."""
+    if verbosity >= 2:
+        return TRACE_LEVEL_NUM
+    if verbosity == 1:
+        return logging.DEBUG
+    return logging.INFO
+
+
+# ---------------------------------------------------------------------------
+# Exclude handling
+
+def _normalize_patterns(patterns: Iterable[str]) -> list[str]:
     """
-
-    parser = argparse.ArgumentParser(description="Toy ZRom Cleaner CLI")
-    parser.add_argument(
-        "path",
-        nargs="?",
-        default=".",
-        help="Path to scan for ROM files (default: current directory)",
-    )
-    parser.add_argument(
-        "--exclude",
-        action="extend",
-        nargs="+",
-        default=[],
-        metavar="GLOB",
-        help=(
-            "Glob patterns to ignore while scanning. "
-            "May be provided multiple times."
-        ),
-    )
-    return parser
-
-
-def _should_exclude(path: Path, patterns: Iterable[str]) -> bool:
-    """Return ``True`` if *path* matches any of *patterns*.
-
-    ``Path.match`` is used for glob style matching.
+    Normalize glob patterns so they behave as users expect:
+      - use POSIX separators,
+      - strip trailing slashes,
+      - prefix with '**/' so patterns match anywhere under root,
+      - if the user targeted a directory (had trailing '/'), also add '/**'.
     """
+    norm: list[str] = []
+    for p in patterns or []:
+        p = p.strip()
+        if not p:
+            continue
+        is_dir = p.endswith(("/", "\\"))
+        p = p.replace("\\", "/").rstrip("/")
+        if not p:
+            continue
+        if not p.startswith("**/"):
+            p_anywhere = f"**/{p}"
+        else:
+            p_anywhere = p
+        norm.append(p_anywhere)
+        if is_dir and not p_anywhere.endswith("/**"):
+            norm.append(p_anywhere + "/**")
 
-    for pattern in patterns:
-        if path.match(pattern):
+    # de-dupe, keep order
+    seen: set[str] = set()
+    out: list[str] = []
+    for pat in norm:
+        if pat not in seen:
+            seen.add(pat)
+            out.append(pat)
+    return out
+
+
+def _should_exclude(item: Path, root: Path, patterns: Iterable[str]) -> bool:
+    """Return True if *item* should be excluded according to *patterns*."""
+    pats = _normalize_patterns(patterns)
+    if not pats:
+        return False
+
+    # Compare using path relative to root so globs behave as expected.
+    rel = item.resolve().relative_to(root.resolve())
+    rel_posix = rel.as_posix()
+
+    # Windows: do case-insensitive matching to feel natural.
+    hay = rel_posix.lower() if os.name == "nt" else rel_posix
+
+    for pat in pats:
+        target = pat.lower() if os.name == "nt" else pat
+        if fnmatch.fnmatch(hay, target):
             return True
     return False
 
 
 def _scan(root: Path, excludes: Iterable[str]) -> List[Path]:
-    """Return a list of files under *root* ignoring ``excludes``."""
-
+    """
+    Return all files under *root*, skipping anything that matches *excludes*.
+    We prune excluded directories during traversal for speed.
+    """
     results: List[Path] = []
-    for dirpath, dirnames, filenames in os.walk(root):
-        current = Path(dirpath)
-        dirnames[:] = [
-            d for d in dirnames if not _should_exclude(current / d, excludes)
-        ]
-        for name in filenames:
-            path = current / name
-            if _should_exclude(path, excludes):
+    root = root.resolve()
+    pats = _normalize_patterns(excludes)
+
+    for dirpath, dirnames, filenames in os.walk(root, topdown=True):
+        dpath = Path(dirpath)
+
+        # Prune directories in-place so we don't descend into excluded trees.
+        keep_dirs: list[str] = []
+        for d in dirnames:
+            p = dpath / d
+            if not _should_exclude(p, root, pats):
+                keep_dirs.append(d)
+        dirnames[:] = keep_dirs
+
+        # Files
+        for f in filenames:
+            p = dpath / f
+            if _should_exclude(p, root, pats):
                 continue
-            results.append(path)
+            results.append(p)
+
     return results
 
 
-def main() -> None:
-    """CLI entry point."""
+# ---------------------------------------------------------------------------
+# CLI
 
-    parser = _build_parser()
-    args = parser.parse_args()
+def _split_excludes(values: list[str] | None) -> list[str]:
+    """Split repeatable/comma-separated -x/--exclude values into a flat list."""
+    pats: list[str] = []
+    for v in values or []:
+      pats.extend([p.strip() for p in v.split(",") if p.strip()])
+    return pats
 
-    excludes = args.exclude
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="ZRom Cleaner (minimal CLI)")
+    parser.add_argument(
+        "path",
+        nargs="?",
+        default=".",
+        help="Path to scan (default: current directory)",
+    )
+    parser.add_argument(
+        "-x", "--exclude",
+        action="append",
+        default=[],
+        metavar="GLOB[,GLOB...]",
+        help="Exclude paths by glob (repeatable). Examples: -x cache/ -x '*.nfo,*.txt'",
+    )
+    parser.add_argument(
+        "-v", "--verbose",
+        action="count",
+        default=0,
+        help="Increase log verbosity: none=INFO, -v=DEBUG, -vv=TRACE",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> None:
+    args = parse_args(argv)
+
+    logging.basicConfig(
+        level=determine_log_level(args.verbose),
+        format="%(levelname)s: %(message)s",
+    )
+    log = logging.getLogger("zrom_cleaner")
 
     root = Path(args.path).resolve()
+    excludes = _split_excludes(args.exclude)
+
+    log.info("Scanning: %s", root)
+    if excludes:
+        log.debug("Excludes: %s", excludes)
+
     for path in _scan(root, excludes):
         print(path)
 

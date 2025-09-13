@@ -1,21 +1,27 @@
 #!/usr/bin/env python3
-"""Minimal CLI stub for ZRom Cleaner.
+"""ZRom Cleaner – minimal CLI with exclude support.
 
-This simplified script demonstrates argument parsing and logging behaviour. It
-is intended as a placeholder and can be replaced with the full project script
-when available.
+Scans a directory tree and prints discovered files, with support for
+--exclude globs. Excludes are matched against paths *relative to the scan
+root* and can be provided multiple times or as comma-separated lists.
+
+Examples:
+  python zrom_cleaner.py demo/roms -x cache/ -x "*.nfo,*.txt" -vv
 """
 
+from __future__ import annotations
+
 import argparse
+import fnmatch
 import logging
+import os
 import sys
 from pathlib import Path
+from typing import Iterable, List
 
 # ---------------------------------------------------------------------------
-# Logging helpers
+# Logging helpers (INFO / DEBUG / TRACE)
 
-# Python's logging module does not include a TRACE level by default.  Define a
-# custom level that sits below ``DEBUG`` so ``-vv`` can enable it.
 TRACE_LEVEL_NUM = 5
 logging.addLevelName(TRACE_LEVEL_NUM, "TRACE")
 
@@ -29,13 +35,7 @@ logging.Logger.trace = _trace  # type: ignore[attr-defined]
 
 
 def determine_log_level(verbosity: int) -> int:
-    """Map ``-v`` occurrences to logging levels.
-
-    ``0`` -> ``logging.INFO``
-    ``1`` -> ``logging.DEBUG``
-    ``2+`` -> ``TRACE_LEVEL_NUM``
-    """
-
+    """0 -> INFO, 1 -> DEBUG, 2+ -> TRACE."""
     if verbosity >= 2:
         return TRACE_LEVEL_NUM
     if verbosity == 1:
@@ -43,39 +43,147 @@ def determine_log_level(verbosity: int) -> int:
     return logging.INFO
 
 
-def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    """Parse command line arguments."""
+# ---------------------------------------------------------------------------
+# Exclude handling
 
-    parser = argparse.ArgumentParser(description="ZRom Cleaner (skeleton)")
+def _normalize_patterns(patterns: Iterable[str]) -> list[str]:
+    """
+    Normalize glob patterns so they behave as users expect:
+      - use POSIX separators,
+      - strip trailing slashes,
+      - prefix with '**/' so patterns match anywhere under root,
+      - if the user targeted a directory (had trailing '/'), also add '/**'.
+    """
+    norm: list[str] = []
+    for p in patterns or []:
+        p = p.strip()
+        if not p:
+            continue
+        is_dir = p.endswith(("/", "\\"))
+        p = p.replace("\\", "/").rstrip("/")
+        if not p:
+            continue
+        if not p.startswith("**/"):
+            p_anywhere = f"**/{p}"
+        else:
+            p_anywhere = p
+        norm.append(p_anywhere)
+        if is_dir and not p_anywhere.endswith("/**"):
+            norm.append(p_anywhere + "/**")
+
+    # de-dupe, keep order
+    seen: set[str] = set()
+    out: list[str] = []
+    for pat in norm:
+        if pat not in seen:
+            seen.add(pat)
+            out.append(pat)
+    return out
+
+
+def _should_exclude(item: Path, root: Path, patterns: Iterable[str]) -> bool:
+    """Return True if *item* should be excluded according to *patterns*."""
+    pats = _normalize_patterns(patterns)
+    if not pats:
+        return False
+
+    # Compare using path relative to root so globs behave as expected.
+    rel = item.resolve().relative_to(root.resolve())
+    rel_posix = rel.as_posix()
+
+    # Windows: do case-insensitive matching to feel natural.
+    hay = rel_posix.lower() if os.name == "nt" else rel_posix
+
+    for pat in pats:
+        target = pat.lower() if os.name == "nt" else pat
+        if fnmatch.fnmatch(hay, target):
+            return True
+    return False
+
+
+def _scan(root: Path, excludes: Iterable[str]) -> List[Path]:
+    """
+    Return all files under *root*, skipping anything that matches *excludes*.
+    We prune excluded directories during traversal for speed.
+    """
+    results: List[Path] = []
+    root = root.resolve()
+    pats = _normalize_patterns(excludes)
+
+    for dirpath, dirnames, filenames in os.walk(root, topdown=True):
+        dpath = Path(dirpath)
+
+        # Prune directories in-place so we don't descend into excluded trees.
+        keep_dirs: list[str] = []
+        for d in dirnames:
+            p = dpath / d
+            if not _should_exclude(p, root, pats):
+                keep_dirs.append(d)
+        dirnames[:] = keep_dirs
+
+        # Files
+        for f in filenames:
+            p = dpath / f
+            if _should_exclude(p, root, pats):
+                continue
+            results.append(p)
+
+    return results
+
+
+# ---------------------------------------------------------------------------
+# CLI
+
+def _split_excludes(values: list[str] | None) -> list[str]:
+    """Split repeatable/comma-separated -x/--exclude values into a flat list."""
+    pats: list[str] = []
+    for v in values or []:
+      pats.extend([p.strip() for p in v.split(",") if p.strip()])
+    return pats
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="ZRom Cleaner (minimal CLI)")
     parser.add_argument(
-        "-v",
-        "--verbose",
+        "path",
+        nargs="?",
+        default=".",
+        help="Path to scan (default: current directory)",
+    )
+    parser.add_argument(
+        "-x", "--exclude",
+        action="append",
+        default=[],
+        metavar="GLOB[,GLOB...]",
+        help="Exclude paths by glob (repeatable). Examples: -x cache/ -x '*.nfo,*.txt'",
+    )
+    parser.add_argument(
+        "-v", "--verbose",
         action="count",
         default=0,
-        help=(
-            "Increase log output: none=INFO, -v=DEBUG, -vv=TRACE "
-            "(uses a custom TRACE level below DEBUG)."
-        ),
+        help="Increase log verbosity: none=INFO, -v=DEBUG, -vv=TRACE",
     )
-    # Real script would define more options here.
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> None:
-    """Entry point for the CLI."""
-
     args = parse_args(argv)
 
-    # Configure logging based on the requested verbosity.
-    logging.basicConfig(level=determine_log_level(args.verbose), format="%(levelname)s: %(message)s")
-    logger = logging.getLogger(__name__)
-
-    logger.info(
-        "ZRom Cleaner skeleton script is bundled. Replace with your full zrom_cleaner.py if needed."
+    logging.basicConfig(
+        level=determine_log_level(args.verbose),
+        format="%(levelname)s: %(message)s",
     )
-    logger.info("Run: python zrom_cleaner.py /path/to/roms --regions U E UK J W --apply")
-    logger.debug("Debug logging is enabled.")
-    logger.trace("Trace level active.")
+    log = logging.getLogger("zrom_cleaner")
+
+    root = Path(args.path).resolve()
+    excludes = _split_excludes(args.exclude)
+
+    log.info("Scanning: %s", root)
+    if excludes:
+        log.debug("Excludes: %s", excludes)
+
+    for path in _scan(root, excludes):
+        print(path)
 
 
 if __name__ == "__main__":

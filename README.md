@@ -122,3 +122,12 @@ If you like the terminal, you can run it there too.
 python zrom_cleaner.py
 python zrom_cleaner.py D:\Roms --regions U E UK J W --report report.csv
 python zrom_cleaner.py D:\Roms --regions U E UK J W --keep-original-pair --apply
+```
+
+Example session when no path is supplied:
+
+```bash
+$ python zrom_cleaner.py
+Enter ROM directory (leave blank for current directory):
+Using ROM directory: /current/directory
+```

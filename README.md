@@ -122,3 +122,22 @@ If you like the terminal, you can run it there too.
 python zrom_cleaner.py
 python zrom_cleaner.py D:\Roms --regions U E UK J W --report report.csv
 python zrom_cleaner.py D:\Roms --regions U E UK J W --keep-original-pair --apply
+```
+
+Verbosity
+---------
+
+Control logging detail with `-v/--verbose` and `--quiet`:
+
+- No `-v`: warnings only
+- `-v`: info messages
+- `-vv`: debug output
+- `-vvv` or more: trace output
+- `--quiet`: only errors
+
+Examples:
+
+```bash
+python zrom_cleaner.py -v
+python zrom_cleaner.py -vvv --quiet
+```
